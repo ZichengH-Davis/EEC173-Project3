@@ -1,25 +1,6 @@
 #!/usr/bin/env python3
 
-
 # Adapted from our sender_stop_and_wait.py and sender.py from Week 7 discussion
-"""
-Minimal sender skeleton for ECS 152A project.
-
-Purpose:
-    - Send two demo packets (plus EOF marker) to verify your environment,
-      receiver, and test scripts are wired up correctly.
-    - Provide a tiny Stop-and-Wait style template students can extend.
-
-Usage:
-    ./test_sender.sh sender_skeleton.py [payload.zip]
-
-Notes:
-    - This is NOT a full congestion-control implementation.
-    - It intentionally sends only a couple of packets so you can smoke-test
-      the simulator quickly before investing time in your own sender.
-    - Delay, jitter, and score calculations are hardcoded placeholders.
-      Students should implement their own metrics tracking.
-"""
 
 from __future__ import annotations
 
@@ -71,9 +52,6 @@ def load_payload_chunks() -> List[bytes]:
 
     if not data:
         return [b"Hello from ECS152A!", b"Second packet from skeleton sender"]
-
-
-    # TODO: THIS NEEDS TO CHANGE, ONLY PROVIDES TWO PACKETS AND NOT THE FULL FILE!!
     
     chunks = []
     # While there is still data to be read
@@ -135,11 +113,6 @@ def main() -> None:
     demo_chunks = load_payload_chunks()
     transfers: List[Tuple[int, bytes]] = []
 
-    # JUST KEEP TRACK OF DELAYS WITHIN ACKOWLEDGEMENT DICTIONARY
-    # Tracking the delays (which is also used to track jitter)
-    # On stand by, haven't quite figured that out. Overhaul of bookeeping
-    # delays = []
-
     total_bytes = 0
     seq = 0
     for chunk in demo_chunks:
@@ -155,8 +128,7 @@ def main() -> None:
     print(
         f"Demo transfer will send {total_bytes} bytes across {len(demo_chunks)} packets (+EOF)."
     )
-    # Reset seq id to be used for later
-    #seq = 0
+    
     # Initial start time
     start = time.time()
     
@@ -175,18 +147,15 @@ def main() -> None:
         # Stored as: ack_id : (start time, ack time)
         # Makes it easier since have to track multiple delays for all packets
         delay_tracker = {}
+
+        # Set that keeps track of which seq_id's have been acknowledged
+        acks = set()
     
+        # Helpful for while loop when sending packets
+        packets_sent = 0
+
         # Until every packet has been sent
         while begin_index < total_packets:
-            
-            # Call helper function to initialize a window with all the necessary packets
-            #packets, acks = window_packets_helper(transfers, begin_index, acks)
-            '''
-            for pkt in packets:
-                sock.sendto(pkt,addr)
-                seq += MSS
-            '''
-
             '''
             # ----------- SENDING WINDOW PACKETS ------------
 
@@ -195,8 +164,7 @@ def main() -> None:
             #   2) Don't send anymore than the window size
             '''
             
-            # Helpful for while loop
-            packets_sent = 0
+            
             while (next_index < total_packets) and packets_sent < WINDOW_SIZE: 
                 # Create the packet and send to reciever
                 id, payload = transfers[next_index]
@@ -244,6 +212,18 @@ def main() -> None:
                 
                 # If the message starts with "ack" then we do the two things
                 if message.startswith("ack"):
+                    # Add the id to the set of all acknowledged seq_id's
+                    acks.add(id)
+
+                    # Also update the time the packet was acknowledged
+                    # Only updating if we
+                    if delay_tracker[id][1] == 0.0:
+                        delay_tracker[id][1] = time.time()
+                    
+                    '''
+
+                    # ORIGINAL IMPLEMENTATION (KEEPING FOR DEBUGGING PURPOSES)
+
                     # Go through each packet within window and update ack times
                     for i in range(begin_index, begin_index + WINDOW_SIZE):
                         # Just care about the seq_id, and not the actual payload
@@ -255,11 +235,19 @@ def main() -> None:
                         if seq_id < id and seq_id not in delay_tracker:
                             delay_tracker[seq_id][1] = time.time()
 
+                    '''
+                    
                     # Now we can slide the window finally
                     # Just make sure not to extend past total_packets
                     # The ack_id indicates that all previous stuff was acknowledged
-                    while begin_index < total_packets and transfers[begin_index][0] < id:
-                        begin_index += 1
+                    while begin_index < total_packets:
+
+                        # Now just check to see if we can slide the window by checking if packet was acknowledged
+                        if transfers[begin_index][0] in acks:
+                            begin_index += 1
+                        else:
+                            # UnAck'd packet found, is the new "begin_index" of the window
+                            break
 
 
             except sock.timeout:
@@ -269,10 +257,13 @@ def main() -> None:
                     # Create the packet and send to reciever
                     # Only difference from prior is that we shouldn't restart timer
                     id, payload = transfers[i]
-                    pkt = make_packet(id, payload)
 
-                    print(f"Resending seq={id}, bytes={len(payload)}")
-                    sock.sendto(pkt, addr)
+                    # If the packet has not already been acknowledged, send it
+                    if id not in acks:
+                        pkt = make_packet(id, payload)
+
+                        print(f"Resending seq={id}, bytes={len(payload)}")
+                        sock.sendto(pkt, addr)
 
             # Now we can just wait to recieve back the final FIN message
             while True:
@@ -284,10 +275,7 @@ def main() -> None:
                     
                     # Now just call final calls to calculate metrics
                     print_metrics(total_bytes, (time.time()- start), delay_tracker)
-                    return
-        
-        
-            
+                    return        
 
 if __name__ == "__main__":
     try:
