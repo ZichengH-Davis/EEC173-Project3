@@ -77,8 +77,8 @@ def load_payload_chunks() -> List[bytes]:
     
     chunks = []
     # While there is still data to be read
-    i = 0
-    while i < 300: #data:
+    
+    while data: #data:
         if len(data) < MSS:
             # If the remainder of data is not a full chunk of size MSS
             # Just read what's left
@@ -88,7 +88,6 @@ def load_payload_chunks() -> List[bytes]:
             chunks.append(data[:MSS])
         
         data = data[MSS:]
-        i += 1
     
     return chunks
 
@@ -315,7 +314,7 @@ def main() -> None:
                
                 # Create the packet and send to reciever
                 # Only difference from prior is that we shouldn't restart timer
-                id, payload = transfers[i]
+                id, payload = transfers[begin_index]
                 pkt = make_packet(id, payload)
 
                 print(f"Resending seq={id}, bytes={len(payload)}")
