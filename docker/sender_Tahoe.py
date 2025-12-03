@@ -181,12 +181,12 @@ def main() -> None:
         size = WINDOW_SIZE
 
         #Tahoe Variables
-        threshold = 8
+        threshold = 64
         duplicate = 1
         #region = 0  #0 = exponential, 1 = linear
         # Until every packet has been sent
 
-
+        last_acked_id = None 
         while begin_index < total_packets:
             
             # Call helper function to initialize a window with all the necessary packets
@@ -207,7 +207,7 @@ def main() -> None:
             
             # Helpful for while loop
             packets_sent = 0
-            while (next_index < total_packets) and packets_sent < WINDOW_SIZE: 
+            while (next_index < total_packets) and packets_sent < size: 
                 # Create the packet and send to reciever
                 id, payload = transfers[next_index]
                 pkt = make_packet(id, payload)
@@ -251,7 +251,11 @@ def main() -> None:
                 if message.startswith("fin"):
                     fin_ack = make_packet(id, b"FIN/ACK")
                     sock.sendto(fin_ack, addr)
-                    delay_tracker[id-3][1] = time.time()
+                    finished_time = time.time()
+                    for pair in delay_tracker.values():
+                        if pair[1]==0.0:
+                            pair[1] = finished_time
+                    #delay_tracker[id-3][1] = time.time()
                     print_metrics(total_bytes, (time.time()- start), delay_tracker)
                     return
                 
@@ -272,21 +276,24 @@ def main() -> None:
                         else:
                             break
 
-                    #note: maybe place on top
-                    if(id in delay_tracker):
-                        duplicate += 1
-                        if(duplicate >= 3):
-                            threshold = (int)(size/2)
-                            size = 1
-                            packets_sent = begin_index
-                            next_index = begin_index
-                            duplicate = 1
-                            print(f"duplicate at {id}, new threshold at {threshold}")
-                    else:
-                        duplicate = 1
+                    
+                    if last_acked_id is None or id > last_acked_id:
+                        last_acked_id = id
+                        duplicate = 0
+
                         if(size <= threshold):
                             size = 2 * size
                         else: size = size + 1
+                    elif id == last_acked_id:
+                        duplicate += 1
+                        if duplicate == 3:
+
+                            threshold = (int)(size/2)
+                            threshold = max(threshold, 1)
+                            size = 1
+
+                            print(f"duplicate at {id}, new threshold at {threshold}")
+
                     # Now we can slide the window finally
                     # Just make sure not to extend past total_packets
                     # The ack_id indicates that all previous stuff was acknowledged
@@ -299,20 +306,20 @@ def main() -> None:
                 #   Use next_index to avoid having to check for out of bounds indexing
                 
                 threshold = (int)(size/2)
+                threshold = max(threshold, 1)
                 size = 1
-                packets_sent = begin_index
                 next_index = begin_index
 
                 print(f"timeout at {id}, new threshold at {threshold}")
 
-                for i in range(begin_index,next_index):
-                    # Create the packet and send to reciever
-                    # Only difference from prior is that we shouldn't restart timer
-                    id, payload = transfers[i]
-                    pkt = make_packet(id, payload)
+               
+                # Create the packet and send to reciever
+                # Only difference from prior is that we shouldn't restart timer
+                id, payload = transfers[i]
+                pkt = make_packet(id, payload)
 
-                    print(f"Resending seq={id}, bytes={len(payload)}")
-                    sock.sendto(pkt, addr)
+                print(f"Resending seq={id}, bytes={len(payload)}")
+                sock.sendto(pkt, addr)
 
             # Now we can just wait to recieve back the final FIN message
         while True:
