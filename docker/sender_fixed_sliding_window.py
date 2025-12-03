@@ -17,7 +17,7 @@ ACK_TIMEOUT = 1.0
 #MAX_TIMEOUTS = 5
 
 # Window Size given in project description
-WINDOW_SIZE = 100
+WINDOW_SIZE = 10
 
 HOST = os.environ.get("RECEIVER_HOST", "127.0.0.1")
 PORT = int(os.environ.get("RECEIVER_PORT", "5001"))
@@ -175,7 +175,7 @@ def main() -> None:
 
                 # Start the timer for that specific packet,
                 # and initialize end time to 0
-                delay_tracker[id] = (time.time(), 0.0)
+                delay_tracker[id] = [time.time(), 0.0]
 
                 # Update for next packet
                 next_index += 1
@@ -250,7 +250,7 @@ def main() -> None:
                             break
 
 
-            except sock.timeout:
+            except socket.timeout:
                 # If a timeout is hit then just resend the whole window again
                 #   Use next_index to avoid having to check for out of bounds indexing
                 for i in range(begin_index,next_index):
