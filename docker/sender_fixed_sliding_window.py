@@ -1,25 +1,6 @@
 #!/usr/bin/env python3
 
-
 # Adapted from our sender_stop_and_wait.py and sender.py from Week 7 discussion
-"""
-Minimal sender skeleton for ECS 152A project.
-
-Purpose:
-    - Send two demo packets (plus EOF marker) to verify your environment,
-      receiver, and test scripts are wired up correctly.
-    - Provide a tiny Stop-and-Wait style template students can extend.
-
-Usage:
-    ./test_sender.sh sender_skeleton.py [payload.zip]
-
-Notes:
-    - This is NOT a full congestion-control implementation.
-    - It intentionally sends only a couple of packets so you can smoke-test
-      the simulator quickly before investing time in your own sender.
-    - Delay, jitter, and score calculations are hardcoded placeholders.
-      Students should implement their own metrics tracking.
-"""
 
 from __future__ import annotations
 
@@ -72,13 +53,11 @@ def load_payload_chunks() -> List[bytes]:
     if not data:
         return [b"Hello from ECS152A!", b"Second packet from skeleton sender"]
 
-
-    # TODO: THIS NEEDS TO CHANGE, ONLY PROVIDES TWO PACKETS AND NOT THE FULL FILE!!
     
     chunks = []
     # While there is still data to be read
     i = 0
-    while i < 150: #data:
+    while data:
         if len(data) < MSS:
             # If the remainder of data is not a full chunk of size MSS
             # Just read what's left
@@ -115,7 +94,7 @@ def print_metrics(total_bytes: int, duration: float, delay_tracker) -> None:
     # Iterate through start/stop times and calculate delays
     for pair in delay_tracker.values():
         delays.append(pair[1] - pair[0])
-        print(f"Start: {pair[0]}, Finish: {pair[1]}")
+        #print(f"Start: {pair[0]}, Finish: {pair[1]}")
     #delays = delays[0:len(delays)-1]
     # Placeholder values - students should calculate these based on actual measurements
     avg_delay = sum(delays)/len(delays) #0.0
@@ -167,11 +146,13 @@ def main() -> None:
         addr = (HOST, PORT)
 
         # Window Related Indexes
+        last_acked_index = -1
         total_packets = len(transfers)
         begin_index = 0                 # First unacked packet
         next_index = 0                  # Keep track of next packet being sent 
                                         # (Helpful during timeouts/ resending the window)
         
+        duplicate = 0
 
         # Dictionary to keep track of which packets we have recieved acks for
         # Stored as: ack_id : (start time, ack time)
@@ -179,6 +160,7 @@ def main() -> None:
         delay_tracker = {}
     
         # Until every packet has been sent
+        last_acked_id = None 
         while begin_index < total_packets:
             
             # Call helper function to initialize a window with all the necessary packets
@@ -209,7 +191,8 @@ def main() -> None:
 
                 # Start the timer for that specific packet,
                 # and initialize end time to 0
-                delay_tracker[id] = [time.time(), 0.0]
+                if(id not in delay_tracker):
+                    delay_tracker[id] = [time.time(), 0.0]
 
                 # Update for next packet
                 next_index += 1
@@ -236,14 +219,19 @@ def main() -> None:
                 # Take the packet and extract info from it
                 pkt, _ = sock.recvfrom(PACKET_SIZE)
                 id, message = parse_ack(pkt)
-                print(f"Received {message.strip()} for ack_id={id}")
+                #print(f"Received {message.strip()} for ack_id={id}")
                 
 
                 # Send the final message to close out
                 if message.startswith("fin"):
                     fin_ack = make_packet(id, b"FIN/ACK")
                     sock.sendto(fin_ack, addr)
-                    delay_tracker[id-3][1] = time.time()
+
+                    # Record the finished time before updating all those values
+                    finished_time = time.time()
+                    for pair in delay_tracker.values():
+                        if pair[1] == 0.0:
+                            pair[1] = finished_time
                     print_metrics(total_bytes, (time.time()- start), delay_tracker)
                     return
                 
@@ -260,19 +248,42 @@ def main() -> None:
                             #   2) time within delay_tracker has not been updated previously
                             if seq_id < id and seq_id in delay_tracker:
                                 delay_tracker[seq_id][1] = time.time()
+                                last_acked_index = i
                         else:
                             break
 
-                    # Now we can slide the window finally
-                    # Just make sure not to extend past total_packets
-                    # The ack_id indicates that all previous stuff was acknowledged
-                    while begin_index < total_packets and transfers[begin_index][0] < id:
-                        begin_index += 1
+                    # Make sure that
+                    if(last_acked_index + 1< total_packets):
+                        begin_index = last_acked_index + 1
 
+                    
+                    # In the case of duplicates we need to track what the last ack'd packet was
+                    # Update the last acked_id so that we know where to index/ start up the window from
+
+                    # Is the newly recieved packet id different, if not update necessary values
+                    if last_acked_id is None or id > last_acked_id:
+                        last_acked_id = id
+                        duplicate = 0
+                    elif id == last_acked_id:
+                        duplicate += 1
+                        if duplicate >= 2:
+                            next_index = begin_index
+
+                            # Hit max duplicates, start sending next ones
+                            id, payload = transfers[next_index]
+                            pkt = make_packet(id, payload)
+
+                            #print(f"DUPLICATE: Resending seq={id}, bytes={len(payload)}")
+                            sock.sendto(pkt, addr)
+                            # Reset back to 0 since the new packet has just been sent                            
+                            duplicate = 0
 
             except socket.timeout:
                 # If a timeout is hit then just resend the whole window again
                 #   Use next_index to avoid having to check for out of bounds indexing
+                begin_index = last_acked_index
+                next_index = begin_index
+                '''
                 for i in range(begin_index,next_index):
                     # Create the packet and send to reciever
                     # Only difference from prior is that we shouldn't restart timer
@@ -281,7 +292,10 @@ def main() -> None:
 
                     print(f"Resending seq={id}, bytes={len(payload)}")
                     sock.sendto(pkt, addr)
+                '''
 
+                #print(f"TIMEOUT: Resending seq={transfers[next_index][1]}, bytes={len(payload)}")
+                
             # Now we can just wait to recieve back the final FIN message
         while True:
             pkt, _ = sock.recvfrom(PACKET_SIZE)
@@ -293,10 +307,11 @@ def main() -> None:
                 finished_time = time.time()
                 final_ack = make_packet(id, b"FIN/ACK")
                 sock.sendto(final_ack, addr)
-                print("Finished final")
+                #print("Finished final")
                 # Now just call final calls to calculate metrics
                 #delay_tracker[id-3][1] = time.time()
                 
+                # Update all the times that the packet was recieved
                 for pair in delay_tracker.values():
                     if pair[1] == 0.0:
                         pair[1] = finished_time
@@ -304,9 +319,6 @@ def main() -> None:
 
                 print_metrics(total_bytes, (time.time()- start), delay_tracker)
                 return
-        
-        
-            
 
 if __name__ == "__main__":
     try:
